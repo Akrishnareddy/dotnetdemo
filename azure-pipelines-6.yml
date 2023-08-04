@@ -1,0 +1,89 @@
+# Deploy to Azure Kubernetes Service
+# Build and push image to Azure Container Registry; Deploy to Azure Kubernetes Service
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+- develop
+
+resources:
+- repo: self
+
+variables:
+
+  # Container registry service connection established during pipeline creation
+  dockerRegistryServiceConnection: '4d94e203-7f14-4986-9422-2dea46cd3226'
+  imageRepository: 'akrishnareddydotnetdemo'
+  containerRegistry: 'devopspipeline1.azurecr.io'
+  dockerfilePath: '**/Dockerfile'
+  tag: '$(Build.BuildId)'
+  imagePullSecret: 'devopspipeline11217fadf-auth'
+
+  # Agent VM image name
+  vmImageName: 'ram'
+
+
+stages:
+- stage: Build
+  displayName: Build stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      name: $(vmImageName)
+    steps:
+    - task: Docker@2
+      displayName: Build and push an image to container registry
+      inputs:
+        command: buildAndPush
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+
+    - upload: manifests
+      artifact: manifests
+
+- stage: Deploy
+  displayName: Deploy stage
+  dependsOn: Build
+
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy
+    pool:
+      name: $(vmImageName)
+    environment: 'Akrishnareddydotnetdemo-1637.cluster1'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: KubernetesManifest@0
+            displayName: Create imagePullSecret
+            inputs:
+              action: createSecret
+              secretName: $(imagePullSecret)
+              dockerRegistryEndpoint: $(dockerRegistryServiceConnection)
+
+          - task: KubernetesManifest@0
+            displayName: Deploy to Kubernetes cluster
+            inputs:
+              action: deploy
+              manifests: |
+                $(Pipeline.Workspace)/manifests/deployment.yml
+                $(Pipeline.Workspace)/manifests/service.yml
+              imagePullSecrets: |
+                $(imagePullSecret)
+              containers: |
+                $(containerRegistry)/$(imageRepository):$(tag)
+          - task: HelmDeploy@0
+            inputs:
+             connectionType: 'Azure Resource Manager'
+             azureSubscription: 'Azure subscription 1(1001ab94-0dcf-4e0e-bed2-8ff6a993ccd2)'
+             azureResourceGroup: 'assign1'
+             kubernetesCluster: 'assignment1'
+             namespace: 'cluster1'
+             command: 'upgrade'
+             chartType: 'FilePath'
+             chartPath: 'helm-repo'
+             valueFile: 'values.yaml'
